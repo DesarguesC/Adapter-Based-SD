@@ -297,20 +297,20 @@ class DDIMSampler(object):
             if not to_cut:
                 e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
             else:
-                e_t = sum([self.model.predict_eps_from_z_and_v(x, t, _output_) for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt()  # float32 or float64 ?
+                e_t = sum([self.model.predict_eps_from_z_and_v(x, t, _output_) for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt().to(device)  # float32 or float64 ?
         
         else:
             if not to_cut:
                 e_t = model_output
             else:
-                e_t = sum([_output_ for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt()
+                e_t = sum([_output_ for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt().to(device)
 
         if score_corrector is not None:
             assert self.model.parameterization == "eps", 'not implemented'
             if not isinstance(c, list):
                 e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
             else:
-                e_t = sum([score_corrector.modify_score(self.model, e_t, x, t, c__, **corrector_kwargs) for c__ in c]) / torch.tensor([len(c)*1.], dtype=torch.float32).sqrt()
+                e_t = sum([score_corrector.modify_score(self.model, e_t, x, t, c__, **corrector_kwargs) for c__ in c]) / torch.tensor([len(c)*1.], dtype=torch.float32).sqrt().to(device)
 
         alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
         alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev

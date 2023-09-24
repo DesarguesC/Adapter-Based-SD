@@ -291,11 +291,11 @@ def diffusion_inference(opt, model, sampler, adapter_features, append_to_context
     else:
         uc = None
         
-    c, uc = fix_cond_shapes(model, c, uc[0], to_cut=opt.to_cut)
-    # be a list at the same time
-    print(f'list length after fixing: {len(c)}, {len(uc)}')
+    c, uc = fix_cond_shapes(model, c, uc, to_cut=opt.to_cut)
     
+    # print(f'list length after fixing: {len(c)}, {len(uc)}')
     
+    # [0] if isinstance(c, list) else uc
 
     if not hasattr(opt, 'H'):
         opt.H = 512

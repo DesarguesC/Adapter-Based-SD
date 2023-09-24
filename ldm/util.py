@@ -196,6 +196,7 @@ def resize_numpy_image(image, max_resolution=512 * 512, resize_short_edge=None, 
 null_cond = None
 
 def fix_cond_shapes(model, prompt_condition, uc, to_cut=False):
+    # uc here never will never be a list
     if uc is None:
         return prompt_condition, uc
     global null_cond
@@ -207,6 +208,8 @@ def fix_cond_shapes(model, prompt_condition, uc, to_cut=False):
             uc = torch.cat((uc, null_cond.repeat((uc.shape[0], 1, 1))), axis=1)
         while prompt_condition.shape[1] < uc.shape[1]:
             prompt_condition = torch.cat((prompt_condition, null_cond.repeat((prompt_condition.shape[0], 1, 1))), axis=1)
+        print('no to cut: ', prompt_condition.shape, uc.shape)
+        
     else:
         assert isinstance(prompt_condition, list), 'list type error'
         # assert len(uc) == len(prompt_condition), 'length error when fixing'
@@ -217,13 +220,15 @@ def fix_cond_shapes(model, prompt_condition, uc, to_cut=False):
             prompt = prompt_condition[i]
             x = uc
             # print('op: ', prompt)
-            while prompt.shape[1] > uc.shape[1]:
-                x = torch.cat((x, null_cond.repeat((uc.shape[0], 1, 1))), axis=1)
+            while prompt.shape[1] > x.shape[1]:
+                x = torch.cat((x, null_cond.repeat((x.shape[0], 1, 1))), axis=1)
+            if len(x.shape) < 3:
+                x = x.unsqueeze(0)
             uc_.append(x)
-            while prompt.shape[1] < uc.shape[1]:
+            while prompt.shape[1] < x.shape[1]:
                 prompt = torch.cat((prompt, null_cond.repeat((prompt.shape[0], 1, 1))), axis=1)
             condition_.append(prompt)
         assert len(uc_) == len(condition_), 'length error when fixing'
-        print(condition_[0].shape, uc_[0].shape)
+        print('to cut: ', condition_[0].shape, uc_[0].shape)
     
     return (condition_, uc_) if isinstance(prompt_condition, list) else (prompt_condition, uc)
