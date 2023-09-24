@@ -279,19 +279,20 @@ def get_adapters(opt, cond_type: ExtraCondition):
 
 def diffusion_inference(opt, model, sampler, adapter_features, append_to_context=None):
     # get text embedding
-    if not opt.to_cut:
+    if not opt.overlay:
         c = model.get_learned_conditioning([opt.prompt])
     else:
         c_ = re.split('[,.!?]', opt.prompt)
         c_list = [cc for cc in c_ if cc != '' and cc!= None]
         c = [model.get_learned_conditioning([cc]) for cc in c_list]
+        # gather prompts that are cut via list
         
     if opt.scale != 1.0:
         uc = model.get_learned_conditioning([opt.neg_prompt])
     else:
         uc = None
         
-    c, uc = fix_cond_shapes(model, c, uc, to_cut=opt.to_cut)
+    c, uc = fix_cond_shapes(model, c, uc, overlay=opt.overlay, dim=opt.o_dim)
     
     # print(f'list length after fixing: {len(c)}, {len(uc)}')
     
@@ -314,7 +315,7 @@ def diffusion_inference(opt, model, sampler, adapter_features, append_to_context
         append_to_context=append_to_context,
         cond_tau=opt.cond_tau,
         style_cond_tau=opt.style_cond_tau,
-        to_cut=opt.to_cut
+        overlay=opt.overlay
     )
 
     x_samples = model.decode_first_stage(samples_latents)

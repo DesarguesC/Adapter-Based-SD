@@ -97,7 +97,9 @@ class DDIMSampler(object):
         C, H, W = shape
         size = (batch_size, C, H, W)
         print(f'Data shape for DDIM sampling is {size}, eta {eta}')
+        
         to_cut = kwargs['to_cut'] if 'to_cut' in kwargs.keys() else False
+        overlay = kwargs['overlay'] if 'overlay' in kwargs.keys() else False
         
         samples, intermediates = self.ddim_sampling(conditioning, size,
                                                     callback=callback,
@@ -116,7 +118,7 @@ class DDIMSampler(object):
                                                     features_adapter=features_adapter,
                                                     append_to_context=append_to_context,
                                                     cond_tau=cond_tau,
-                                                    style_cond_tau=style_cond_tau, to_cut=to_cut
+                                                    style_cond_tau=style_cond_tau, to_cut=to_cut, overlay=overlay
                                                     )
         return samples, intermediates
 
@@ -132,6 +134,7 @@ class DDIMSampler(object):
         b = shape[0]
         
         to_cut = kwargs['to_cut'] if 'to_cut' in kwargs.keys() else False
+        overlay = kwargs['overlay'] if 'overlay' in kwargs else False
         
         if x_T is None:
             img = torch.randn(shape, device=device)
@@ -170,7 +173,7 @@ class DDIMSampler(object):
                                           (1 - cond_tau) * total_steps) else features_adapter,
                                       append_to_context=None if index < int(
                                           (1 - style_cond_tau) * total_steps) else append_to_context,
-                                      to_cut=to_cut
+                                      to_cut=to_cut, overlay=overlay
                                       )
             img, pred_x0 = outs
             if callback: callback(i)
@@ -190,6 +193,7 @@ class DDIMSampler(object):
         b, *_, device = *x.shape, x.device
         
         to_cut = kwargs['to_cut'] if 'to_cut' in kwargs else False
+        overlay = kwargs['overlay'] if 'overlay' in kwargs else False
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             if not to_cut:
@@ -200,7 +204,7 @@ class DDIMSampler(object):
                 else:
                     model_output = self.model.apply_model(x, t, c, features_adapter=features_adapter)
                     
-            else:
+            elif to_cut and not overlay:
                 # prompt cut
                 if isinstance(c, list):
                     assert isinstance(unconditioinal_conditioning, list), 'cut failed assertion'
@@ -247,7 +251,7 @@ class DDIMSampler(object):
                 model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
                 model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
             
-            else:
+            elif to_cut and not overlay:
                 
                 # prompt cut
                 if isinstance(c, list):

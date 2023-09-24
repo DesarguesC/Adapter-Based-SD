@@ -30,10 +30,16 @@ def main():
         help='extand imput image size',
     )
     parser.add_argument(
-        '--to_cut',
+        '--overlay',
         type=str2bool,
         default=0,
-        help='whether to cut a prompt',   # cut symbol: '|'
+        help='whether to overlay prompts that are cut',   # cut symbol: '|'
+    )
+    parser.add_argument(
+        '--o_dim',
+        type=int,
+        default=0,
+        help='torch cat dim'
     )
     
     

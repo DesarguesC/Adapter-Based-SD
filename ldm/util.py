@@ -195,7 +195,7 @@ def resize_numpy_image(image, max_resolution=512 * 512, resize_short_edge=None, 
 # make uc and prompt shapes match via padding for long prompts
 null_cond = None
 
-def fix_cond_shapes(model, prompt_condition, uc, to_cut=False):
+def fix_cond_shapes(model, prompt_condition, uc, overlay=False, dim=0):
     # uc here never will never be a list
     if uc is None:
         return prompt_condition, uc
@@ -203,7 +203,7 @@ def fix_cond_shapes(model, prompt_condition, uc, to_cut=False):
     if null_cond is None:
         null_cond = model.get_learned_conditioning([""])
     
-    if not to_cut:
+    if not overlay:
         while prompt_condition.shape[1] > uc.shape[1]:
             uc = torch.cat((uc, null_cond.repeat((uc.shape[0], 1, 1))), axis=1)
         while prompt_condition.shape[1] < uc.shape[1]:
@@ -229,6 +229,12 @@ def fix_cond_shapes(model, prompt_condition, uc, to_cut=False):
                 prompt = torch.cat((prompt, null_cond.repeat((prompt.shape[0], 1, 1))), axis=1)
             condition_.append(prompt)
         assert len(uc_) == len(condition_), 'length error when fixing'
-        print('to cut: ', condition_[0].shape, uc_[0].shape)
-    
-    return (condition_, uc_) if isinstance(prompt_condition, list) else (prompt_condition, uc)
+            
+        for i in condition_:
+            print(i.shape)
+        
+        
+        prompt_condition = torch.cat([pp for pp in condition_], dim)
+        uc = torch.cat([uu for uu in uc_], dim)
+        
+    return (prompt_condition, uc)
