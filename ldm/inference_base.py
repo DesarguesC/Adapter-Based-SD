@@ -292,7 +292,7 @@ def diffusion_inference(opt, model, sampler, adapter_features, append_to_context
     else:
         uc = None
         
-    c, uc = fix_cond_shapes(model, c, uc, overlay=opt.overlay, dim=opt.o_dim)
+    c, uc = fix_cond_shapes(model, c, uc, overlay=opt.overlay, dim=opt.o_dim, use_weights=opt.wei)
     
     # print(f'list length after fixing: {len(c)}, {len(uc)}')
     

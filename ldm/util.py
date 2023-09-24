@@ -195,7 +195,7 @@ def resize_numpy_image(image, max_resolution=512 * 512, resize_short_edge=None, 
 # make uc and prompt shapes match via padding for long prompts
 null_cond = None
 
-def fix_cond_shapes(model, prompt_condition, uc, overlay=False, dim=0):
+def fix_cond_shapes(model, prompt_condition, uc, overlay=False, use_weights=False, dim=0):
     # uc here never will never be a list
     if uc is None:
         return prompt_condition, uc
@@ -234,7 +234,11 @@ def fix_cond_shapes(model, prompt_condition, uc, overlay=False, dim=0):
             print(i.shape)
         
         
-        prompt_condition = torch.cat([pp for pp in condition_], dim)
+        prompt_condition = torch.cat([pp for pp in condition_], dim) if not use_weights else \
+                                                    torch.cat([i*1.*condition_[i] for i in range(len(condition_))], dim)
+        
+        # now it's consistent weights, it's possible to train a new model.
+        
         uc = torch.cat([uu for uu in uc_], dim)
         
     return (prompt_condition, uc)

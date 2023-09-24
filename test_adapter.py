@@ -41,6 +41,12 @@ def main():
         default=0,
         help='torch cat dim'
     )
+    parser.add_argument(
+        '--wei',
+        type=str2bool,
+        default=0,
+        help='whether to add weights to each layer when using overlay mode'
+    )
     
     
     opt = parser.parse_args()
@@ -97,7 +103,7 @@ def main():
                 adapter_features, append_to_context = get_adapter_feature(cond, adapter) if cond != None else (None, None)
                 opt.prompt = prompt
                 result = diffusion_inference(opt, sd_model, sampler, adapter_features, append_to_context)
-                cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_result.png'), tensor2img(result))
+                cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_{opt.overlay}_useW={opt.wei}.png'), tensor2img(result))
 
 
 if __name__ == '__main__':
