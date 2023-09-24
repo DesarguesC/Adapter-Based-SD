@@ -2,6 +2,7 @@
 tmp/*
 logrus/*
 outputs/*
+log/*
 
 # /Datasets/*
 # Datasets/vit-gpt2-image-captioning/*
