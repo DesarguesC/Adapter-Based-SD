@@ -3,6 +3,7 @@
 import torch
 import numpy as np
 from tqdm import tqdm
+from jieba import re
 
 from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like, \
     extract_into_tensor
@@ -95,7 +96,7 @@ class DDIMSampler(object):
         C, H, W = shape
         size = (batch_size, C, H, W)
         print(f'Data shape for DDIM sampling is {size}, eta {eta}')
-
+        to_cut = to_cut if 'to_cut' in kwargs.keys() else False
         samples, intermediates = self.ddim_sampling(conditioning, size,
                                                     callback=callback,
                                                     img_callback=img_callback,
@@ -113,7 +114,7 @@ class DDIMSampler(object):
                                                     features_adapter=features_adapter,
                                                     append_to_context=append_to_context,
                                                     cond_tau=cond_tau,
-                                                    style_cond_tau=style_cond_tau,
+                                                    style_cond_tau=style_cond_tau, to_cut=to_cut
                                                     )
         return samples, intermediates
 
@@ -124,7 +125,7 @@ class DDIMSampler(object):
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, features_adapter=None,
-                      append_to_context=None, cond_tau=0.4, style_cond_tau=1.0):
+                      append_to_context=None, cond_tau=0.4, style_cond_tau=1.0, to_cut=False):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -164,6 +165,7 @@ class DDIMSampler(object):
                                           (1 - cond_tau) * total_steps) else features_adapter,
                                       append_to_context=None if index < int(
                                           (1 - style_cond_tau) * total_steps) else append_to_context,
+                                      to_cut=to_cut
                                       )
             img, pred_x0 = outs
             if callback: callback(i)
@@ -179,51 +181,112 @@ class DDIMSampler(object):
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, features_adapter=None,
-                      append_to_context=None):
+                      append_to_context=None, to_cut=False):
         b, *_, device = *x.shape, x.device
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
-            if append_to_context is not None:
-                model_output = self.model.apply_model(x, t, torch.cat([c, append_to_context], dim=1),
-                                                      features_adapter=features_adapter)
-            else:
-                model_output = self.model.apply_model(x, t, c, features_adapter=features_adapter)
-        else:
-            x_in = torch.cat([x] * 2)
-            t_in = torch.cat([t] * 2)
-            if isinstance(c, dict):
-                assert isinstance(unconditional_conditioning, dict)
-                c_in = dict()
-                for k in c:
-                    if isinstance(c[k], list):
-                        c_in[k] = [torch.cat([
-                            unconditional_conditioning[k][i],
-                            c[k][i]]) for i in range(len(c[k]))]
-                    else:
-                        c_in[k] = torch.cat([
-                            unconditional_conditioning[k],
-                            c[k]])
-            elif isinstance(c, list):
-                c_in = list()
-                assert isinstance(unconditional_conditioning, list)
-                for i in range(len(c)):
-                    c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
-            else:
+            if not to_cut:
+                # not to cut prompt => model_output is ought to be not a list
                 if append_to_context is not None:
-                    pad_len = append_to_context.size(1)
-                    new_unconditional_conditioning = torch.cat(
-                        [unconditional_conditioning, unconditional_conditioning[:, -pad_len:, :]], dim=1)
-                    new_c = torch.cat([c, append_to_context], dim=1)
-                    c_in = torch.cat([new_unconditional_conditioning, new_c])
+                    model_output = self.model.apply_model(x, t, torch.cat([c, append_to_context], dim=1),
+                                                          features_adapter=features_adapter)
                 else:
-                    c_in = torch.cat([unconditional_conditioning, c])
-            model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
-            model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
+                    model_output = self.model.apply_model(x, t, c, features_adapter=features_adapter)
+                    
+            else:
+                c_list = re.split(c, ',|.')
+                assert c_list != None or c_list != [], 'cut failed assertion'
+                if append_to_context is not None:
+                    model_output = [self.model.apply_model(x, t, torch.cat([c__, append_to_context], dim=1),
+                                                          features_adapter=features_adapter) for c__ in c_list]
+                else:
+                    model_output = [self.model.apply_model(x, t, c__, features_adapter=features_adapter) for c__ in c_list]
+                    
+        else:
+            if not to_cut:
+                x_in = torch.cat([x] * 2)
+                t_in = torch.cat([t] * 2)
+                if isinstance(c, dict):
+                    assert isinstance(unconditional_conditioning, dict)
+                    c_in = dict()
+                    for k in c:
+                        if isinstance(c[k], list):
+                            c_in[k] = [torch.cat([
+                                unconditional_conditioning[k][i],
+                                c[k][i]]) for i in range(len(c[k]))]
+                        else:
+                            c_in[k] = torch.cat([
+                                unconditional_conditioning[k],
+                                c[k]])
+                elif isinstance(c, list):
+                    c_in = list()
+                    assert isinstance(unconditional_conditioning, list)
+                    for i in range(len(c)):
+                        c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
+                else:
+                    if append_to_context is not None:
+                        pad_len = append_to_context.size(1)
+                        new_unconditional_conditioning = torch.cat(
+                            [unconditional_conditioning, unconditional_conditioning[:, -pad_len:, :]], dim=1)
+                        new_c = torch.cat([c, append_to_context], dim=1)
+                        c_in = torch.cat([new_unconditional_conditioning, new_c])
+                    else:
+                        c_in = torch.cat([unconditional_conditioning, c])
+                model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
+                model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
+            else:
+                c_list = re.split(c, ',|.')
+                assert c_list != None or c_list != [], 'cut failed assertion'
+                c = None
+                model_output = []
+                
+                
+                x_in = torch.cat([x] * 2)
+                t_in = torch.cat([t] * 2)
+                
+                for c in c_list:
+                
+                    if isinstance(c, dict):
+                        assert isinstance(unconditional_conditioning, dict)
+                        c_in = dict()
+                        for k in c:
+                            if isinstance(c[k], list):
+                                c_in[k] = [torch.cat([
+                                    unconditional_conditioning[k][i],
+                                    c[k][i]]) for i in range(len(c[k]))]
+                            else:
+                                c_in[k] = torch.cat([
+                                    unconditional_conditioning[k],
+                                    c[k]])
+                    elif isinstance(c, list):
+                        c_in = list()
+                        assert isinstance(unconditional_conditioning, list)
+                        for i in range(len(c)):
+                            c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
+                    else:
+                        if append_to_context is not None:
+                            pad_len = append_to_context.size(1)
+                            new_unconditional_conditioning = torch.cat(
+                                [unconditional_conditioning, unconditional_conditioning[:, -pad_len:, :]], dim=1)
+                            new_c = torch.cat([c, append_to_context], dim=1)
+                            c_in = torch.cat([new_unconditional_conditioning, new_c])
+                        else:
+                            c_in = torch.cat([unconditional_conditioning, c])
+                    model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
+                    model_output.append(model_uncond + unconditional_guidance_scale * (model_t - model_uncond))
+                
 
         if self.model.parameterization == "v":
-            e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
+            if not to_cut:
+                e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
+            else:
+                e_t = sum([self.model.predict_eps_from_z_and_v(x, t, _output_) for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt()
+        
         else:
-            e_t = model_output
+            if not to_cut:
+                e_t = model_output
+            else:
+                e_t = sum([_output_ for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt()
 
         if score_corrector is not None:
             assert self.model.parameterization == "eps", 'not implemented'

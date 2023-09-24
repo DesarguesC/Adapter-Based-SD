@@ -12,6 +12,16 @@ DEFAULT_NEGATIVE_PROMPT = 'longbody, lowres, bad anatomy, bad hands, missing fin
                           'fewer digits, cropped, worst quality, low quality'
 
 
+def str2bool(v: str) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
 def get_base_argument_parser() -> argparse.ArgumentParser:
     """get the base argument parser for inference scripts"""
     parser = argparse.ArgumentParser()
@@ -292,6 +302,7 @@ def diffusion_inference(opt, model, sampler, adapter_features, append_to_context
         append_to_context=append_to_context,
         cond_tau=opt.cond_tau,
         style_cond_tau=opt.style_cond_tau,
+        to_cut=opt.to_cut
     )
 
     x_samples = model.decode_first_stage(samples_latents)

@@ -6,7 +6,7 @@ from basicsr.utils import tensor2img
 from pytorch_lightning import seed_everything
 from torch import autocast
 
-from ldm.inference_base import (diffusion_inference, get_adapters, get_base_argument_parser, get_sd_models)
+from ldm.inference_base import (diffusion_inference, get_adapters, get_base_argument_parser, get_sd_models, str2bool)
 from ldm.modules.extra_condition import api
 from ldm.modules.extra_condition.api import (ExtraCondition, get_adapter_feature, get_cond_model)
 
@@ -28,6 +28,12 @@ def main():
         type=int,
         default=1,
         help='extand imput image size',
+    )
+    parser.add_argument(
+        '--to_cut',
+        type=str2bool,
+        default=no,
+        help='whether to cut a prompt',   # cut symbol: '|'
     )
     
     
