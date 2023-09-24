@@ -3,7 +3,6 @@
 import torch
 import numpy as np
 from tqdm import tqdm
-from jieba import re
 
 from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like, \
     extract_into_tensor
@@ -83,20 +82,23 @@ class DDIMSampler(object):
                **kwargs
                ):
         if conditioning is not None:
-            if isinstance(conditioning, dict):
-                cbs = conditioning[list(conditioning.keys())[0]].shape[0]
+            conditioning_ = conditioning[0] if isinstance(conditioning, list) else conditioning
+            if isinstance(conditioning_, dict):
+                cbs = conditioning_[list(conditioning_.keys())[0]].shape[0]
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
-                if conditioning.shape[0] != batch_size:
-                    print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}")
+                if conditioning_.shape[0] != batch_size:
+                    print(f"Warning: Got {conditioning_.shape[0]} conditionings but batch-size is {batch_size}")
 
+                    
         self.make_schedule(ddim_num_steps=S, ddim_eta=eta, verbose=verbose)
         # sampling
         C, H, W = shape
         size = (batch_size, C, H, W)
         print(f'Data shape for DDIM sampling is {size}, eta {eta}')
-        to_cut = to_cut if 'to_cut' in kwargs.keys() else False
+        to_cut = kwargs['to_cut'] if 'to_cut' in kwargs.keys() else False
+        
         samples, intermediates = self.ddim_sampling(conditioning, size,
                                                     callback=callback,
                                                     img_callback=img_callback,
@@ -125,9 +127,12 @@ class DDIMSampler(object):
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, features_adapter=None,
-                      append_to_context=None, cond_tau=0.4, style_cond_tau=1.0, to_cut=False):
+                      append_to_context=None, cond_tau=0.4, style_cond_tau=1.0, **kwargs):
         device = self.model.betas.device
         b = shape[0]
+        
+        to_cut = kwargs['to_cut'] if 'to_cut' in kwargs.keys() else False
+        
         if x_T is None:
             img = torch.randn(shape, device=device)
         else:
@@ -181,8 +186,10 @@ class DDIMSampler(object):
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, features_adapter=None,
-                      append_to_context=None, to_cut=False):
+                      append_to_context=None, **kwargs):
         b, *_, device = *x.shape, x.device
+        
+        to_cut = kwargs['to_cut'] if 'to_cut' in kwargs else False
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             if not to_cut:
@@ -194,13 +201,18 @@ class DDIMSampler(object):
                     model_output = self.model.apply_model(x, t, c, features_adapter=features_adapter)
                     
             else:
-                c_list = re.split(c, ',|.')
-                assert c_list != None or c_list != [], 'cut failed assertion'
-                if append_to_context is not None:
-                    model_output = [self.model.apply_model(x, t, torch.cat([c__, append_to_context], dim=1),
-                                                          features_adapter=features_adapter) for c__ in c_list]
+                # prompt cut
+                if isinstance(c, list):
+                    assert isinstance(unconditioinal_conditioning, list), 'cut failed assertion'
                 else:
-                    model_output = [self.model.apply_model(x, t, c__, features_adapter=features_adapter) for c__ in c_list]
+                    assert not isinstance(unconditioinal_conditioning, list), 'original error'
+                    
+                if append_to_context is not None:
+                    model_output = [self.model.apply_model(x, t, torch.cat([c_, append_to_context], dim=1),
+                                                          features_adapter=features_adapter) for c_ in c if c_ != None]
+                else:
+                    model_output = [self.model.apply_model \
+                                    (x, t, c_, features_adapter=features_adapter) for c_ in c if c_ != None]
                     
         else:
             if not to_cut:
@@ -234,53 +246,58 @@ class DDIMSampler(object):
                         c_in = torch.cat([unconditional_conditioning, c])
                 model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
                 model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
+            
             else:
-                c_list = re.split(c, ',|.')
-                assert c_list != None or c_list != [], 'cut failed assertion'
-                c = None
+                
+                # prompt cut
+                if isinstance(c, list):
+                    assert isinstance(unconditional_conditioning, list), 'cut failed assertion'
+                else:
+                    assert not isinstance(unconditional_conditioning, list), 'original error'
+                assert len(c)==len(unconditional_conditioning), 'length error exsits in fix_shape function'
+                
                 model_output = []
-                
-                
                 x_in = torch.cat([x] * 2)
                 t_in = torch.cat([t] * 2)
                 
-                for c in c_list:
-                
-                    if isinstance(c, dict):
-                        assert isinstance(unconditional_conditioning, dict)
+                for p in range(len(c)):
+                    c_ = c[p]
+                    if isinstance(c_, dict):
+                        assert isinstance(unconditional_conditioning[p], dict)
                         c_in = dict()
-                        for k in c:
-                            if isinstance(c[k], list):
+                        for k in c_:
+                            if isinstance(c_[k], list):
                                 c_in[k] = [torch.cat([
-                                    unconditional_conditioning[k][i],
-                                    c[k][i]]) for i in range(len(c[k]))]
+                                    unconditional_conditioning[p][k][i],
+                                    c_[k][i]]) for i in range(len(c_[k]))]
                             else:
                                 c_in[k] = torch.cat([
-                                    unconditional_conditioning[k],
-                                    c[k]])
-                    elif isinstance(c, list):
+                                    unconditional_conditioning[p][k],
+                                    c_[k]])
+                    elif isinstance(c_, list):
                         c_in = list()
-                        assert isinstance(unconditional_conditioning, list)
-                        for i in range(len(c)):
-                            c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
+                        assert isinstance(unconditional_conditioning[p], list)
+                        for i in range(len(c_)):
+                            c_in.append(torch.cat([unconditional_conditioning[p][i], c_[i]]))
                     else:
                         if append_to_context is not None:
                             pad_len = append_to_context.size(1)
                             new_unconditional_conditioning = torch.cat(
-                                [unconditional_conditioning, unconditional_conditioning[:, -pad_len:, :]], dim=1)
+                                [unconditional_conditioning[p], unconditional_conditioning[p][:, -pad_len:, :]], dim=1)
                             new_c = torch.cat([c, append_to_context], dim=1)
                             c_in = torch.cat([new_unconditional_conditioning, new_c])
                         else:
-                            c_in = torch.cat([unconditional_conditioning, c])
+                            c_in = torch.cat([unconditional_conditioning[p], c_])
                     model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
                     model_output.append(model_uncond + unconditional_guidance_scale * (model_t - model_uncond))
                 
-
+        assert len(c) == len(model_output), 'appendance error'
+        
         if self.model.parameterization == "v":
             if not to_cut:
                 e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
             else:
-                e_t = sum([self.model.predict_eps_from_z_and_v(x, t, _output_) for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt()
+                e_t = sum([self.model.predict_eps_from_z_and_v(x, t, _output_) for _output_ in model_output]) / torch.tensor([len(model_output)*1.], dtype=torch.float32).sqrt()  # float32 or float64 ?
         
         else:
             if not to_cut:
@@ -290,7 +307,10 @@ class DDIMSampler(object):
 
         if score_corrector is not None:
             assert self.model.parameterization == "eps", 'not implemented'
-            e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
+            if not isinstance(c, list):
+                e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
+            else:
+                e_t = sum([score_corrector.modify_score(self.model, e_t, x, t, c__, **corrector_kwargs) for c__ in c]) / torch.tensor([len(c)*1.], dtype=torch.float32).sqrt()
 
         alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
         alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev

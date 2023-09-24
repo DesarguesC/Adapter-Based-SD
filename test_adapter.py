@@ -32,7 +32,7 @@ def main():
     parser.add_argument(
         '--to_cut',
         type=str2bool,
-        default=no,
+        default=0,
         help='whether to cut a prompt',   # cut symbol: '|'
     )
     
@@ -65,14 +65,14 @@ def main():
     # prepare models
     sd_model, sampler = get_sd_models(opt)
     
-    adapter = get_adapters(opt, getattr(ExtraCondition, which_cond)) if cond_path != [None] else None
+    adapter = get_adapters(opt, getattr(ExtraCondition, which_cond)) if opt.cond_path != None else None
     cond_model = None
-    if opt.cond_inp_type == 'image' and cond_path != None:
+    if opt.cond_inp_type == 'image' and opt.cond_path != None:
         cond_model = get_cond_model(opt, getattr(ExtraCondition, which_cond))
     else:
         cond_model = None
     
-    process_cond_module = getattr(api, f'get_cond_{which_cond}') if cond_path != None else None
+    process_cond_module = getattr(api, f'get_cond_{which_cond}') if opt.cond_path != None else None
 
     # inference
     with torch.inference_mode(), \
@@ -85,7 +85,8 @@ def main():
                 cond = process_cond_module(opt, cond_path, opt.cond_inp_type, cond_model) if cond_model != None else None
 
                 base_count = len(os.listdir(opt.outdir)) // 2
-                cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_{which_cond}.png'), tensor2img(cond))
+                if which_cond != None:
+                    cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_{which_cond}.png'), tensor2img(cond))
 
                 adapter_features, append_to_context = get_adapter_feature(cond, adapter) if cond != None else (None, None)
                 opt.prompt = prompt

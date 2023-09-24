@@ -1,0 +1,1 @@
+python test_adapter.py --prompt "The sun was setting behind the ancient church spire，casting a warm glow over the scene. The air was filled with the scent of fresh bread and roasting coffee，and the rhythmic clang of the town clock signaled the passing of time." --outdir outputs/debug/1 --sd_ckpt /root/autodl-tmp/models/v1-5-pruned-emaonly.ckpt --to_cut yes --n_samples 1

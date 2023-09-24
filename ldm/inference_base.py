@@ -1,6 +1,7 @@
 import argparse
 import torch
 from omegaconf import OmegaConf
+from jieba import re
 
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
@@ -278,12 +279,23 @@ def get_adapters(opt, cond_type: ExtraCondition):
 
 def diffusion_inference(opt, model, sampler, adapter_features, append_to_context=None):
     # get text embedding
-    c = model.get_learned_conditioning([opt.prompt])
+    if not opt.to_cut:
+        c = model.get_learned_conditioning([opt.prompt])
+    else:
+        c_ = re.split('[,.!?]', opt.prompt)
+        c_list = [cc for cc in c_ if cc != '' and cc!= None]
+        c = [model.get_learned_conditioning([cc]) for cc in c_list]
+        
     if opt.scale != 1.0:
         uc = model.get_learned_conditioning([opt.neg_prompt])
     else:
         uc = None
-    c, uc = fix_cond_shapes(model, c, uc)
+        
+    c, uc = fix_cond_shapes(model, c, uc[0], to_cut=opt.to_cut)
+    # be a list at the same time
+    print(f'list length after fixing: {len(c)}, {len(uc)}')
+    
+    
 
     if not hasattr(opt, 'H'):
         opt.H = 512
