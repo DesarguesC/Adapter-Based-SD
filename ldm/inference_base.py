@@ -11,6 +11,16 @@ from ldm.util import fix_cond_shapes, load_model_from_config, read_state_dict
 DEFAULT_NEGATIVE_PROMPT = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, ' \
                           'fewer digits, cropped, worst quality, low quality'
 
+def str2bool(v: str) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
 
 def get_base_argument_parser() -> argparse.ArgumentParser:
     """get the base argument parser for inference scripts"""
@@ -269,19 +279,29 @@ def get_adapters(opt, cond_type: ExtraCondition):
 def diffusion_inference(opt, model, sampler, adapter_features, append_to_context=None):
     # get text embedding
     c = model.get_learned_conditioning([opt.prompt])
+    c_ = model.get_learned_conditioning([opt.newprompt]) if opt.is_double else None
     if opt.scale != 1.0:
         uc = model.get_learned_conditioning([opt.neg_prompt])
     else:
         uc = None
     c, uc = fix_cond_shapes(model, c, uc)
-
+    if opt.is_double:
+        c_, _ = fix_cond_shapes(model, c_, uc)
+    if opt.is_double:
+        print('first line...')
     if not hasattr(opt, 'H'):
         opt.H = 512
         opt.W = 512
     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-    samples_latents, _ = sampler.sample(
+
+    """
+    ddim_sampler return:
+        samples, intermediates
+    """
+
+    latents_samples, _ = sampler.sample(
         S=opt.steps,
-        conditioning=c,
+        conditioning=[c, c_],
         batch_size=1,
         shape=shape,
         verbose=False,
@@ -292,9 +312,23 @@ def diffusion_inference(opt, model, sampler, adapter_features, append_to_context
         append_to_context=append_to_context,
         cond_tau=opt.cond_tau,
         style_cond_tau=opt.style_cond_tau,
+
+        is_double=opt.is_double,
+        swap_shape=(opt.swapH, opt.swapW),
+        endStep=opt.endStep
     )
 
-    x_samples = model.decode_first_stage(samples_latents)
-    x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
+    x_samples = []
+    print(f'length = {len(latents_samples)}')
+    for samples_latents in latents_samples:
+        if samples_latents is not None:
+            x__ = model.decode_first_stage(samples_latents)
+            x__ = torch.clamp((x__ + 1.0) / 2.0, min=0.0, max=1.0)
+            x__ = torch.tensor(x__, dtype=torch.float32)
+            x_samples.append(x__)
+        else:
+            raise NotImplementedError('Wrongly Implemented in Double Line')
+
+    assert opt.is_double and len(x_samples)==2 or not opt.is_double and len(x_samples)==1, 'not match!'
 
     return x_samples

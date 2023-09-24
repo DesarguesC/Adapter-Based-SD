@@ -81,20 +81,63 @@ class DDIMSampler(object):
                # this has to come in the same format as the conditioning, # e.g. as encoded tokens, ...
                **kwargs
                ):
-        if conditioning is not None:
-            if isinstance(conditioning, dict):
-                cbs = conditioning[list(conditioning.keys())[0]].shape[0]
+
+        is_double = kwargs['is_double'] if 'is_double' in kwargs.keys() else None
+        swap_shape = kwargs['swap_shape'] if 'swap_shape' in kwargs.keys() and is_double != None else None
+        endStep = kwargs['endStep'] if 'endStep' in kwargs.keys() and is_double != None else None
+        
+        if is_double is not None and is_double:
+            assert conditioning[1] != None, 'conditioning contains None while doubling line'
+        elif is_double is None:
+            assert conditioning[0] is None, 'conditioning contains tow valid elements while not doubling'
+
+        if conditioning != None:
+            if isinstance(conditioning[0], dict):
+                cbs = conditioning[list(conditioning[0].keys())[0]].shape[0]
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
-            else:
-                if conditioning.shape[0] != batch_size:
+            elif isinstance(conditioning[1], dict):
+                cbs = conditioning[list(conditioning[1].keys())[0]].shape[0]
+                if cbs != batch_size:
+                    print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
+            elif not is_double:
+                if conditioning[0].shape[0] != batch_size:
                     print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}")
+            elif is_double:
+                if conditioning[0].shape[0] != batch_size:
+                    print(f"Warning: Got {conditioning[0].shape[0]} conditionings but batch-size is {batch_size}")
+                if conditioning[1].shape[0] != batch_size:
+                    print(f"Warning: Got {conditioning[1].shape[0]} conditionings but batch-size is {batch_size}")
 
         self.make_schedule(ddim_num_steps=S, ddim_eta=eta, verbose=verbose)
         # sampling
         C, H, W = shape
         size = (batch_size, C, H, W)
+        swap_shape = (C, swap_shape[0], swap_shape[1]) if is_double != None else None
+
         print(f'Data shape for DDIM sampling is {size}, eta {eta}')
+
+
+        """
+        
+        ddim_sampling return
+        
+            imgs, pred_x0s = outs
+            # img, img_ = imgs[0], imgs[1]
+            pred_x0, pred_x0_ = pred_x0s[0], pred_x0s[0]
+
+            if callback: callback(i)
+            if img_callback:
+                img_callback(pred_x0, i)
+                img_callback(pred_x0_, i)
+
+            if index % log_every_t == 0 or index == total_steps - 1:
+                intermediates['x_inter'].append(imgs)
+                intermediates['pred_x0'].append(pred_x0s)
+
+            return imgs, intermediates
+        
+        """
 
         samples, intermediates = self.ddim_sampling(conditioning, size,
                                                     callback=callback,
@@ -114,6 +157,9 @@ class DDIMSampler(object):
                                                     append_to_context=append_to_context,
                                                     cond_tau=cond_tau,
                                                     style_cond_tau=style_cond_tau,
+                                                    is_double=is_double,
+                                                    swap_shape=swap_shape,
+                                                    endStep=endStep
                                                     )
         return samples, intermediates
 
@@ -124,13 +170,19 @@ class DDIMSampler(object):
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, features_adapter=None,
-                      append_to_context=None, cond_tau=0.4, style_cond_tau=1.0):
+                      append_to_context=None, cond_tau=0.4, style_cond_tau=1.0, **kwargs):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
             img = torch.randn(shape, device=device)
+            img_ = torch.randn(shape, device=device)
         else:
             img = x_T
+            img_ = x_T
+
+        is_double = kwargs['is_double'] if 'is_double' in kwargs.keys() else None
+        swap_shape = kwargs['swap_shape'] if 'swap_shape' in kwargs.keys() and is_double is not None else None
+        endStep = kwargs['endStep'] if 'endStep' in kwargs.keys() and is_double is not None else None
 
         if timesteps is None:
             timesteps = self.ddpm_num_timesteps if ddim_use_original_steps else self.ddim_timesteps
@@ -139,6 +191,10 @@ class DDIMSampler(object):
             timesteps = self.ddim_timesteps[:subset_end]
 
         intermediates = {'x_inter': [img], 'pred_x0': [img]}
+        intermediates_ = {'x_inter': [img_], 'pred_x0': [img_]}
+
+        _intermediates_ = [intermediates, intermediates_]
+
         time_range = reversed(range(0, timesteps)) if ddim_use_original_steps else np.flip(timesteps)
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
@@ -153,81 +209,183 @@ class DDIMSampler(object):
                 assert x0 is not None
                 img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?
                 img = img_orig * mask + (1. - mask) * img
+                img_ = img_orig * mask + (1. - mask) * img_
 
-            outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
-                                      quantize_denoised=quantize_denoised, temperature=temperature,
-                                      noise_dropout=noise_dropout, score_corrector=score_corrector,
-                                      corrector_kwargs=corrector_kwargs,
-                                      unconditional_guidance_scale=unconditional_guidance_scale,
-                                      unconditional_conditioning=unconditional_conditioning,
-                                      features_adapter=None if index < int(
-                                          (1 - cond_tau) * total_steps) else features_adapter,
-                                      append_to_context=None if index < int(
-                                          (1 - style_cond_tau) * total_steps) else append_to_context,
-                                      )
-            img, pred_x0 = outs
+            imgs = [img, img_]
+
+                # outs = [x_prev, x_prev_], [pred_x0, pred_x0_]
+            assert isinstance(cond, list) and isinstance(imgs, list), f'type not match error with: type(cond) = {type(cond)}, type(imgs) = {type(cond)}'
+            outs = self.p_sample_ddim(imgs, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+                                          quantize_denoised=quantize_denoised, temperature=temperature,
+                                          noise_dropout=noise_dropout, score_corrector=score_corrector,
+                                          corrector_kwargs=corrector_kwargs,
+                                          unconditional_guidance_scale=unconditional_guidance_scale,
+                                          unconditional_conditioning=unconditional_conditioning,
+                                          features_adapter=None if index < int(
+                                              (1 - cond_tau) * total_steps) else features_adapter,
+                                          append_to_context=None if index < int(
+                                              (1 - style_cond_tau) * total_steps) else append_to_context,
+                                          is_double=is_double, swap_shape=swap_shape, endStep=endStep   # swap method
+                                          )
+
+            imgs, pred_x0s = outs
+            pred_x0, pred_x0_ = pred_x0s[0], pred_x0s[1]
+            
+
             if callback: callback(i)
-            if img_callback: img_callback(pred_x0, i)
+            if img_callback:
+                img_callback(pred_x0, i)
+                img_callback(pred_x0_, i)
 
             if index % log_every_t == 0 or index == total_steps - 1:
-                intermediates['x_inter'].append(img)
-                intermediates['pred_x0'].append(pred_x0)
+                intermediates['x_inter'].append(imgs)
+                intermediates['pred_x0'].append(pred_x0s)
 
-        return img, intermediates
+        return imgs, intermediates
 
     @torch.no_grad()
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, features_adapter=None,
-                      append_to_context=None):
-        b, *_, device = *x.shape, x.device
+                      append_to_context=None, **kwargs):
+        b, *_, device = (*x.shape, x.device) if not isinstance(x, list) else (*x[0].shape, x[0].device)
+        # x: imgs
+        if isinstance(x, list):
+            assert x[0].shape == x[1].shape, 'error occurred before swapping'
+
+        is_double = kwargs['is_double'] if 'is_double' in kwargs.keys() else None
+        swap_shape = kwargs['swap_shape'] if 'swap_shape' in kwargs.keys() and is_double is not None else None
+        endStep = kwargs['endStep'] if 'endStep' in kwargs.keys() and is_double is not None else None
+
+
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             if append_to_context is not None:
-                model_output = self.model.apply_model(x, t, torch.cat([c, append_to_context], dim=1),
+                model_output = self.model.apply_model(x[0], t, torch.cat([c[0], append_to_context], dim=1),
                                                       features_adapter=features_adapter)
+                model_output_ = self.model.apply_model(x[1], t, torch.cat([c[1], append_to_context], dim=1),
+                                                      features_adapter=features_adapter) if c[1] is not None else None
             else:
-                model_output = self.model.apply_model(x, t, c, features_adapter=features_adapter)
+                model_output = self.model.apply_model(x[0], t, c[0], features_adapter=features_adapter)
+                model_output_ = self.model.apply_model(x[1], t, c[1], features_adapter=features_adapter) if c[1] is not None else None
         else:
-            x_in = torch.cat([x] * 2)
-            t_in = torch.cat([t] * 2)
-            if isinstance(c, dict):
-                assert isinstance(unconditional_conditioning, dict)
-                c_in = dict()
-                for k in c:
-                    if isinstance(c[k], list):
-                        c_in[k] = [torch.cat([
-                            unconditional_conditioning[k][i],
-                            c[k][i]]) for i in range(len(c[k]))]
-                    else:
-                        c_in[k] = torch.cat([
-                            unconditional_conditioning[k],
-                            c[k]])
-            elif isinstance(c, list):
-                c_in = list()
-                assert isinstance(unconditional_conditioning, list)
-                for i in range(len(c)):
-                    c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
-            else:
-                if append_to_context is not None:
-                    pad_len = append_to_context.size(1)
-                    new_unconditional_conditioning = torch.cat(
-                        [unconditional_conditioning, unconditional_conditioning[:, -pad_len:, :]], dim=1)
-                    new_c = torch.cat([c, append_to_context], dim=1)
-                    c_in = torch.cat([new_unconditional_conditioning, new_c])
+            # print('Double Line Not Yet Implemented')
+            # assert False, 'Double Line Not Implement Error'
+            if not isinstance(x, list):
+                x_in = torch.cat([x] * 2)
+                t_in = torch.cat([t] * 2)
+                if isinstance(c, dict):
+                    assert isinstance(unconditional_conditioning, dict)
+                    c_in = dict()
+                    for k in c:
+                        if isinstance(c[k], list):
+                            c_in[k] = [torch.cat([
+                                unconditional_conditioning[k][i],
+                                c[k][i]]) for i in range(len(c[k]))]
+                        else:
+                            c_in[k] = torch.cat([
+                                unconditional_conditioning[k],
+                                c[k]])
+                elif isinstance(c, list):
+                    c_in = list()
+                    assert isinstance(unconditional_conditioning, list)
+                    for i in range(len(c)):
+                        c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
                 else:
-                    c_in = torch.cat([unconditional_conditioning, c])
-            model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
-            model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
+                    if append_to_context is not None:
+                        pad_len = append_to_context.size(1)
+                        new_unconditional_conditioning = torch.cat(
+                            [unconditional_conditioning, unconditional_conditioning[:, -pad_len:, :]], dim=1)
+                        new_c = torch.cat([c, append_to_context], dim=1)
+                        c_in = torch.cat([new_unconditional_conditioning, new_c])
+                    else:
+                        c_in = torch.cat([unconditional_conditioning, c])
+
+            else:
+                assert len(x) == 2, 'length error occurred in ddim'
+                assert isinstance(c, list), 'type not match error occurred in ddim'
+                x_in = [torch.cat([x[0]] * 2), torch.cat([x[1]] * 2)]
+                t_in = torch.cat([t] * 2)
+
+                if isinstance(c[0], dict):
+                    assert isinstance(c[1], dict)
+                    assert isinstance(unconditional_conditioning, dict) #      impossible to be a list type
+
+                    c_in = dict()
+                    for k in c[0]:
+                        if isinstance(c[0][k], list):
+                            c_in[k] = [torch.cat([
+                                unconditional_conditioning[k][i],
+                                c[0][k][i]]) for i in range(len(c[0][k]))]
+                        else:
+                            c_in[k] = torch.cat([
+                                unconditional_conditioning[k],
+                                c[0][k]])
+
+                    c_in_ = dict()
+                    for k in c[1]:
+                        if isinstance(c[1][k], list):
+                            c_in_[k] = [torch.cat([
+                                unconditional_conditioning[k][i],
+                                c[1][k][i]]) for i in range(len(c[1][k]))]
+                        else:
+                            c_in_[k] = torch.cat([
+                                unconditional_conditioning[k],
+                                c[1][k]])
+
+                elif isinstance(c[0], list):
+                    assert isinstance(c[1], list), 'list type not match at ddim switch step'
+                    assert len(c[0])==len(c[1]), 'list length not match at ddim switch step'
+                    c_in = list()
+                    assert isinstance(unconditional_conditioning, list)
+                    for i in range(len(c[0])):
+                        c_in.append(torch.cat([unconditional_conditioning[i], c[0][i]]))
+
+                    c_in_ = list()
+                    assert isinstance(unconditional_conditioning, list)
+                    for i in range(len(c[1])):
+                        c_in_.append(torch.cat([unconditional_conditioning[i], c[1][i]]))
+
+                else:
+                    if append_to_context is not None:
+                        pad_len = append_to_context.size(1)
+                        new_unconditional_conditioning = torch.cat(
+                            [unconditional_conditioning, unconditional_conditioning[:, -pad_len:, :]], dim=1)
+                        new_c = torch.cat([c[0], append_to_context], dim=1)
+                        c_in = torch.cat([new_unconditional_conditioning, new_c])
+
+                        new_c_ = torch.cat([c[1], append_to_context], dim=1)
+                        c_in_ = torch.cat([new_unconditional_conditioning, new_c_])
+                    else:
+                        c_in = torch.cat([unconditional_conditioning, c[0]])
+                        c_in_ = torch.cat([unconditional_conditioning, c[1]])
+
+            # classifier-free guidance
+
+            if not isinstance(x, list):
+                model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in, features_adapter=features_adapter).chunk(2)
+                model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
+
+            else:
+                model_uncond, model_t = self.model.apply_model(x_in[0], t_in, c_in, features_adapter=features_adapter).chunk(2)
+                model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
+
+                model_uncond_, model_t_ = self.model.apply_model(x_in[1], t_in, c_in_, features_adapter=features_adapter).chunk(2)
+                model_output_ = model_uncond_ + unconditional_guidance_scale * (model_t_ - model_uncond_)
 
         if self.model.parameterization == "v":
-            e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
+            # print('IN v')
+            e_t = self.model.predict_eps_from_z_and_v(x[0], t, model_output)   # the noise in next turn
+            e_t_ = self.model.predict_eps_from_z_and_v(x[1], t, model_output_) if is_double else None
         else:
+            # print('NOT IN v')
             e_t = model_output
+            e_t_ = model_output_ if is_double else None
 
         if score_corrector is not None:
             assert self.model.parameterization == "eps", 'not implemented'
-            e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
+            e_t = score_corrector.modify_score(self.model, e_t, x[0], t, c[0], **corrector_kwargs)
+            e_t_ = score_corrector.modify_score(self.model, e_t_, x[1], t, c[1], **corrector_kwargs) if is_double else None
 
         alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
         alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev
@@ -241,19 +399,41 @@ class DDIMSampler(object):
 
         # current prediction for x_0
         if self.model.parameterization != "v":
-            pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
+            pred_x0 = (x[0] - sqrt_one_minus_at * e_t) / a_t.sqrt()
+            pred_x0_ = (x[1] - sqrt_one_minus_at * e_t_) / a_t.sqrt() if is_double else None
         else:
-            pred_x0 = self.model.predict_start_from_z_and_v(x, t, model_output)
+            pred_x0 = self.model.predict_start_from_z_and_v(x[0], t, model_output)
+            pred_x0_ = self.model.predict_start_from_z_and_v(x[1], t, model_output_) if is_double else None
 
         if quantize_denoised:
             pred_x0, _, *_ = self.model.first_stage_model.quantize(pred_x0)
+            pred_x0_, _, *_ = self.model.first_stage_model.quantize(pred_x0_)
+
         # direction pointing to x_t
         dir_xt = (1. - a_prev - sigma_t ** 2).sqrt() * e_t
-        noise = sigma_t * noise_like(x.shape, device, repeat_noise) * temperature
+        noise = sigma_t * noise_like(x[0].shape, device, repeat_noise) * temperature
+
+        dir_xt_ = (1. - a_prev - sigma_t ** 2).sqrt() * e_t_
+        noise_ = sigma_t * noise_like(x[1].shape, device, repeat_noise) * temperature
+
         if noise_dropout > 0.:
             noise = torch.nn.functional.dropout(noise, p=noise_dropout)
+            noise_ = torch.nn.functional.dropout(noise_, p=noise_dropout)
+
+        
         x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
-        return x_prev, pred_x0
+        x_prev_ = a_prev.sqrt() * pred_x0_ + dir_xt_ + noise_
+
+        if t < endStep:
+            
+            print(f'\nstep into {t} time step\n', end='')
+            
+            # print([pred_x0, pred_x0_])
+            pred_x0, pred_x0_ = SWAP_latent_img(pred_x0, pred_x0_, swap_shape)
+        # TODO: swap tensors between two lines
+
+
+        return [x_prev, x_prev_], [pred_x0, pred_x0_]
 
     @torch.no_grad()
     def stochastic_encode(self, x0, t, use_original_steps=False, noise=None):
@@ -291,3 +471,44 @@ class DDIMSampler(object):
                                           unconditional_guidance_scale=unconditional_guidance_scale,
                                           unconditional_conditioning=unconditional_conditioning)
         return x_dec
+
+def SWAP_latent_img(la1, la2, swap_shape, start=1/4, throughout_channel=True, trans=False, replace=[False, True]):
+    # ought to keep throughout_channel=True
+    # swap=False => do the replacement
+    return la1, la2
+    
+    # start form 1/4 length of the width
+    # assert len(swap_shape)==2, 'shape exception'
+    if len(swap_shape) == 2:
+        H, W = swap_shape
+    elif len(swap_shape) == 3:
+        _, H, W = swap_shape
+    # swap_shape: H, W
+    
+    # assert len(x)==2, 'list length exception'
+    assert la1 != None and la2 != None, 'element exception'
+    a, b = la1, la2
+    start_point_H, start_point_W = (int)(H*start), (int)(W*start)
+    end_point_H, end_point_W = start_point_H + H + 1, start_point_W + W + 1
+    if throughout_channel and not replace[0]:
+        temp = a[0, :, start_point_H:end_point_H, start_point_W:end_point_W]
+        a[0, :, start_point_H:end_point_H, start_point_W:end_point_W] \
+            = b[0, :, start_point_H:end_point_H, start_point_W:end_point_W].T if trans else b[0, :, start_point_H:end_point_H, start_point_W:end_point_W]
+        b[0, :, start_point_H:end_point_H, start_point_W:end_point_W] = temp.T if trans else temp
+    else:
+        temp = a[0, 0, start_point_H:end_point_H, start_point_W:end_point_W]
+        a[0, 0, start_point_H:end_point_H, start_point_W:end_point_W] \
+            = b[0, 0, start_point_H:end_point_H, start_point_W:end_point_W]
+        b[0, 0, start_point_H:end_point_H, start_point_W:end_point_W] = temp
+
+    if throughout_channel and replace[0]:
+        # True => a->b
+        # False => b->a
+        if replace[1]:
+            b[0, :, start_point_H:end_point_H, start_point_W:end_point_W] = a[0, :, start_point_H:end_point_H, start_point_W:end_point_W]
+        else:
+            a[0, :, start_point_H:end_point_H, start_point_W:end_point_W] = b[0, :, start_point_H:end_point_H, start_point_W:end_point_W]
+
+
+
+    return (a, b)

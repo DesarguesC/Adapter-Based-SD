@@ -1,5 +1,5 @@
 import os
-
+import numpy as np
 import cv2
 import torch
 from basicsr.utils import tensor2img
@@ -12,14 +12,23 @@ from ldm.modules.extra_condition.api import (ExtraCondition, get_adapter_feature
 
 torch.set_grad_enabled(False)
 
+# Use two of diffusion line and swap the part of tensor in latent space.
+
+
 
 def main():
     supported_cond = [e.name for e in ExtraCondition]
     parser = get_base_argument_parser()
     parser.add_argument(
+        '--newprompt',
+        # TODO: As a LLM prompt for Edition?
+        type=str,
+        default="nothing",
+        help='another prompt in double line mode'
+    )
+    parser.add_argument(
         '--which_cond',
         type=str,
-        required=True,
         default="None",
         choices=supported_cond,
         help='which condition modality you want to test',
@@ -42,11 +51,19 @@ def main():
         default=128,
         help='less than H'
     )
+    # swap or just use a crop area in one latent image to replace the corresponding area in another ?
+    # TODO: (do the swap or the replacement ?)
     parser.add_argument(
         '--endStep',
         type=int,
         default=25,
         help='when to end up swapping tensors in latent space'
+    )
+    parser.add_argument(
+        '--is_double',
+        type=str2bool,
+        default=True,
+        help='use two stable-diffusion base line two enable the swap method'
     )
 
     
@@ -72,18 +89,19 @@ def main():
                 image_paths.append(line.split('; ')[0])
                 prompts.append(line.split('; ')[1])
     else:
-        image_paths = [opt.cond_path]
+        image_paths = [opt.cond_path] if opt.cond_path != None else [None]
         prompts = [opt.prompt]
     print(image_paths)
 
     # prepare models
     sd_model, sampler = get_sd_models(opt)
-    adapter = get_adapters(opt, getattr(ExtraCondition, which_cond))
+    if opt.which_cond != "None":
+        adapter = get_adapters(opt, getattr(ExtraCondition, which_cond))
     cond_model = None
-    if opt.cond_inp_type == 'image':
+    if opt.cond_inp_type == 'image' and opt.which_cond != "None":
         cond_model = get_cond_model(opt, getattr(ExtraCondition, which_cond))
-
-    process_cond_module = getattr(api, f'get_cond_{which_cond}')
+    if opt.which_cond != "None":
+        process_cond_module = getattr(api, f'get_cond_{which_cond}')
 
     # inference
     with torch.inference_mode(), \
@@ -93,15 +111,29 @@ def main():
             seed_everything(opt.seed)
             for v_idx in range(opt.n_samples):
                 # seed_everything(opt.seed+v_idx+test_idx)
-                cond = process_cond_module(opt, cond_path, opt.cond_inp_type, cond_model)
+                cond = process_cond_module(opt, cond_path, opt.cond_inp_type, cond_model) if cond_path != None else None
 
                 base_count = len(os.listdir(opt.outdir)) // 2
-                cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_{which_cond}.png'), tensor2img(cond))
+                if cond != None:
+                    cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_{which_cond}.png'), tensor2img(cond))
 
-                adapter_features, append_to_context = get_adapter_feature(cond, adapter)
+                if opt.which_cond != "None" and cond != None:
+                    adapter_features, append_to_context = get_adapter_feature(cond, adapter)
+                else:
+                    adapter_features, append_to_context = None, None
                 opt.prompt = prompt
+
                 result = diffusion_inference(opt, sd_model, sampler, adapter_features, append_to_context)
-                cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_result.png'), tensor2img(result))
+                if opt.is_double:
+                    assert isinstance(result, list), '?'
+                    assert len(result) == 2, '??'
+                a, b = tensor2img(result[0]), tensor2img(result[1])
+                # print(type(result))
+                # print(result)
+                # result = np.ndarray(result, dtype=np.float32)
+                cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_result_a.png'), a)
+                cv2.imwrite(os.path.join(opt.outdir, f'{base_count:05}_result_b.png'), b)
+                
 
 
 if __name__ == '__main__':
