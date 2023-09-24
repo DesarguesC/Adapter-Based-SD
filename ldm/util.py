@@ -205,4 +205,5 @@ def fix_cond_shapes(model, prompt_condition, uc):
         uc = torch.cat((uc, null_cond.repeat((uc.shape[0], 1, 1))), axis=1)
     while prompt_condition.shape[1] < uc.shape[1]:
         prompt_condition = torch.cat((prompt_condition, null_cond.repeat((prompt_condition.shape[0], 1, 1))), axis=1)
+    print(prompt_condition.shape, uc.shape)
     return prompt_condition, uc
